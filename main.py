@@ -23,6 +23,7 @@ SENDER_EMAIL = "Sender email"
 SENDER_PASSWORD = "Your Google app password"
 VT_API_KEY = "Your Virus Total API key"
 RECIPIENT_EMAIL = "Reciever email"
+#hi
 
 APP_DIR = os.path.join(os.getcwd(), "monitor_data")
 SCREEN_DIR = os.path.join(APP_DIR, "screenshots")
