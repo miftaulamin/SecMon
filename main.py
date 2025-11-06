@@ -18,7 +18,7 @@ import pyautogui
 import requests
 import json
 
-# --------------------- CONFIG ---------------------
+# --------------------- CONFIG --------------------
 SENDER_EMAIL = "Sender email"
 SENDER_PASSWORD = "Your Google app password"
 VT_API_KEY = "Your Virus Total API key"
