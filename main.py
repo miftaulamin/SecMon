@@ -21,10 +21,10 @@ import requests
 import json
 
 # --------------------- CONFIG ---------------------
-SENDER_EMAIL = "khannirob385@gmail.com"
-SENDER_PASSWORD = "xhfl hwsf tyfe vkgk"
-VT_API_KEY = "d77ebff050ba6b60d5f530866a8f087a1c48e6eb2d72f2b61a5575e7d0d6a186"
-RECIPIENT_EMAIL = "darkbadhon0@gmail.com"
+SENDER_EMAIL = "Sender Email"
+SENDER_PASSWORD = "Password"
+VT_API_KEY = "VirusTotal Api key"
+RECIPIENT_EMAIL = "Recipient Email"
 
 APP_DIR = os.path.join(os.getcwd(), "monitor_data")
 SCREEN_DIR = os.path.join(APP_DIR, "screenshots")
