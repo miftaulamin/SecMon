@@ -1,9 +1,11 @@
 """
 Enhanced Security Monitoring Application
 Modern GUI with improved design and user experience
+WITH EXACT MATCH LOGIC AND INTERVAL-BASED TIMING
 """
 
 import os
+import subprocess
 import threading
 import time
 import tkinter as tk
@@ -19,10 +21,10 @@ import requests
 import json
 
 # --------------------- CONFIG ---------------------
-SENDER_EMAIL = "Sender email"
-SENDER_PASSWORD = "Your Google app password"
-VT_API_KEY = "Your Virus Total API key"
-RECIPIENT_EMAIL = "Reciever email"
+SENDER_EMAIL = "khannirob385@gmail.com"
+SENDER_PASSWORD = "xhfl hwsf tyfe vkgk"
+VT_API_KEY = "d77ebff050ba6b60d5f530866a8f087a1c48e6eb2d72f2b61a5575e7d0d6a186"
+RECIPIENT_EMAIL = "darkbadhon0@gmail.com"
 
 APP_DIR = os.path.join(os.getcwd(), "monitor_data")
 SCREEN_DIR = os.path.join(APP_DIR, "screenshots")
@@ -30,19 +32,19 @@ os.makedirs(SCREEN_DIR, exist_ok=True)
 BLACKLIST_FILE = os.path.join(APP_DIR, "blacklist.txt")
 SOFT_LIST_FILE = os.path.join(APP_DIR, "soft_names.txt")
 
-# Default settings
-DEFAULT_SCREEN_INTERVAL_MIN = 60
-DEFAULT_DAILY_SCAN_HOUR = 12
+# Default settings - UPDATED FOR INTERVALS
+DEFAULT_SCREEN_INTERVAL_MIN = 1  # 1 minute for screenshots
+DEFAULT_SCAN_INTERVAL_HOURS = 24  # 24 hours for software scan
 DEFAULT_WORK_HOURS = 8
 
 # Modern color scheme
 COLORS = {
-    'primary': '#2563eb',      # Blue
+    'primary': '#2563eb',
     'primary_dark': '#1e40af',
-    'success': '#10b981',      # Green
-    'danger': '#ef4444',       # Red
-    'warning': '#f59e0b',      # Orange
-    'bg_dark': '#1e293b',      # Dark blue-gray
+    'success': '#10b981',
+    'danger': '#ef4444',
+    'warning': '#f59e0b',
+    'bg_dark': '#1e293b',
     'bg_light': '#f8fafc',
     'text_dark': '#0f172a',
     'text_light': '#64748b',
@@ -54,7 +56,7 @@ COLORS = {
 def load_blacklist():
     if not os.path.exists(BLACKLIST_FILE):
         with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
-            f.write("Python\nOpenVPN\n")
+            f.write("python\nopenvpn\n")
     with open(BLACKLIST_FILE, "r", encoding="utf-8") as f:
         items = [line.strip() for line in f.readlines() if line.strip()]
     return items
@@ -93,35 +95,21 @@ def send_email_with_attachment(subject, html_body, attachment_path=None):
         return False
 
 def get_installed_software_list():
-    raw_file = os.path.join(APP_DIR, "unformated_soft.txt")
     try:
-        os.system(f'reg query HKLM\\SOFTWARE > "{raw_file}"')
-    except Exception as e:
-        print("Registry query failed:", e)
+        subprocess.run(["./softscan"], check=True)
+    except:
+        try:
+            subprocess.run(["softscan.exe"], check=True)
+        except Exception as e:
+            print("C++ software scan failed:", e)
+            return []
+
+    cleaned_file = "soft_clean.txt"
+    if not os.path.exists(cleaned_file):
         return []
 
-    names = []
-    try:
-        with open(raw_file, "r", encoding="utf-8", errors="ignore") as f:
-            lines = f.readlines()
-        for line in lines:
-            line = line.strip()
-            if not line or "SOFTWARE\\" not in line:
-                continue
-            name = line.split("SOFTWARE\\")[-1].strip()
-            if not name or len(name) > 60 and name.count('-') >= 2:
-                continue
-            names.append(name)
-    except Exception as e:
-        print("Parsing registry dump failed:", e)
-    
-    try:
-        with open(SOFT_LIST_FILE, "w", encoding="utf-8") as f:
-            for n in names:
-                f.write(n + "\n")
-    except:
-        pass
-    return names
+    with open(cleaned_file, "r", encoding="utf-8", errors="ignore") as f:
+        return [line.strip() for line in f.readlines() if line.strip()]
 
 def make_zip_report(zip_name="Alldata.zip"):
     zip_path = os.path.join(APP_DIR, zip_name)
@@ -132,15 +120,36 @@ def make_zip_report(zip_name="Alldata.zip"):
             zf.write(SOFT_LIST_FILE, arcname=os.path.basename(SOFT_LIST_FILE))
     return zip_path
 
+def check_blacklist_match(package_name, blacklist_item, is_windows):
+    """
+    Check if package matches blacklist item
+    
+    Args:
+        package_name: The installed package/software name
+        blacklist_item: The blacklist entry to check against
+        is_windows: True for Windows (substring match), False for Linux (exact match)
+    
+    Returns:
+        True if matches, False otherwise
+    """
+    pkg_lower = package_name.lower().strip()
+    bl_lower = blacklist_item.lower().strip()
+    
+    if is_windows:
+        return bl_lower in pkg_lower
+    else:
+        return pkg_lower == bl_lower
+
 class AdminMonitor(threading.Thread):
-    def __init__(self, scan_hour, screen_interval_min, work_hours, blacklist, ui_callback=None):
+    def __init__(self, scan_interval_hours, screen_interval_min, work_hours, blacklist, ui_callback=None):
         super().__init__(daemon=True)
-        self.scan_hour = scan_hour
+        self.scan_interval_hours = max(1, int(scan_interval_hours))
         self.screen_interval = max(1, int(screen_interval_min))
         self.work_hours = max(1, int(work_hours))
         self.blacklist = blacklist[:]
         self.ui_callback = ui_callback
         self._stop_event = threading.Event()
+        self.last_scan_time = 0
 
     def log(self, txt):
         print("[Monitor]", txt)
@@ -156,77 +165,140 @@ class AdminMonitor(threading.Thread):
     def stopped(self):
         return self._stop_event.is_set()
 
-    def run_daily_scan(self):
+    def run_software_scan(self):
+        """Run software scan with EXACT MATCH LOGIC"""
         names = get_installed_software_list()
         found = []
-        for bl in self.blacklist:
-            for n in names:
-                if bl.lower() in n.lower():
-                    found.append((bl, n))
         
+        is_windows = os.name == "nt"
+        os_type = "Windows" if is_windows else "Linux"
+        match_type = "substring" if is_windows else "exact"
+        
+        self.log(f"🔍 Scanning {len(names)} packages on {os_type} (using {match_type} match)")
+
+        for bl_item in self.blacklist:
+            for package_name in names:
+                if check_blacklist_match(package_name, bl_item, is_windows):
+                    found.append((bl_item, package_name))
+
         soft_lines = "\n".join(names)
         with open(os.path.join(APP_DIR, "soft_report.txt"), "w", encoding="utf-8") as f:
+            f.write(f"OS: {os_type}\n")
+            f.write(f"Match Type: {match_type}\n")
+            f.write(f"Total Packages: {len(names)}\n")
+            f.write("-" * 50 + "\n")
             f.write(soft_lines)
-        
+
         if found:
+            found_unique = list(set(found))
+            
             zip_path = make_zip_report()
-            found_list_html = "<br>".join([f"{b} matched {n}" for b, n in found])
+            found_list_html = "<br>".join([f"<b>{bl}</b> matched <code>{pkg}</code>" 
+                                          for bl, pkg in found_unique])
+
             html = f"""
-            <html><body>
-            <h3 style='color:red;'>Blacklisted Software Detected</h3>
-            <p>{found_list_html}</p>
-            <p>Full installed software list attached.</p>
-            </body></html>
+            <html>
+            <body style="font-family: Arial, sans-serif;">
+                <h2 style='color: #ef4444;'>⚠️ Blacklisted Software Detected</h2>
+                <p><strong>OS:</strong> {os_type}</p>
+                <p><strong>Match Type:</strong> {match_type}</p>
+                <p><strong>Found {len(found_unique)} blacklisted item(s):</strong></p>
+                <div style="background: #f8fafc; padding: 15px; border-left: 4px solid #ef4444;">
+                    {found_list_html}
+                </div>
+                <p>Full installed software list attached in zip file.</p>
+            </body>
+            </html>
             """
-            self.log("⚠️ Blacklisted software detected: " + ", ".join([f"{b}->{n}" for b, n in found]))
-            send_email_with_attachment("Blacklisted Software Detected!!", html, zip_path)
+
+            summary = ", ".join([f"{bl}→{pkg}" for bl, pkg in found_unique[:5]])
+            if len(found_unique) > 5:
+                summary += f" ... and {len(found_unique) - 5} more"
+            
+            self.log(f"⚠️ ALERT: Found {len(found_unique)} blacklisted items: {summary}")
+            send_email_with_attachment("⚠️ Blacklisted Software Detected!", html, zip_path)
         else:
-            self.log("✓ Daily scan: no blacklisted software found.")
+            self.log(f"✓ Scan complete: No blacklisted software found")
+
+    def should_run_scan(self):
+        """Check if enough time has passed for next scan"""
+        current_time = time.time()
+        time_since_last_scan = current_time - self.last_scan_time
+        scan_interval_seconds = self.scan_interval_hours * 3600
+        
+        return time_since_last_scan >= scan_interval_seconds
 
     def run(self):
         shots_per_report = max(1, int((self.work_hours * 60) / self.screen_interval))
-        self.log(f"🚀 Monitor started. Screenshot interval: {self.screen_interval} min. Daily scan: {self.scan_hour}:00")
+        
+        self.log(f"🚀 Monitor started")
+        self.log(f"📸 Screenshot interval: {self.screen_interval} minute(s)")
+        self.log(f"🔍 Software scan interval: {self.scan_interval_hours} hour(s)")
+        self.log(f"📊 Report after: {shots_per_report} screenshots")
+        
         shot_count = 0
+        seconds_counter = 0
+        
+        # Run initial scan immediately
+        try:
+            self.log("🔍 Running initial software scan...")
+            self.run_software_scan()
+            self.last_scan_time = time.time()
+            next_scan = time.localtime(self.last_scan_time + (self.scan_interval_hours * 3600))
+            next_scan_str = time.strftime("%Y-%m-%d %H:%M:%S", next_scan)
+            self.log(f"✓ Next scan scheduled at: {next_scan_str}")
+        except Exception as e:
+            self.log(f"❌ Initial scan failed: {e}")
         
         while not self.stopped():
-            try:
-                now = time.localtime()
-                stamp = time.strftime("%Y-%m-%d_%H-%M-%S", now)
-                fname = os.path.join(SCREEN_DIR, f"{stamp}.png")
-                img = pyautogui.screenshot()
-                img.save(fname)
-                self.log(f"📸 Screenshot captured: {stamp}")
-                shot_count += 1
-            except Exception as e:
-                self.log("❌ Screenshot failed: " + str(e))
-
-            if shot_count >= shots_per_report:
+            # Take screenshot every interval
+            if seconds_counter % (self.screen_interval * 60) == 0 and seconds_counter > 0:
                 try:
-                    zip_path = make_zip_report()
-                    html = f"<html><body><p>Automated screenshot report: {shot_count} screenshots attached.</p></body></html>"
-                    send_email_with_attachment("Automated Screenshot Report", html, zip_path)
-                    self.log(f"📧 Sent screenshot report with {shot_count} images.")
-                    for fn in os.listdir(SCREEN_DIR):
-                        try:
-                            os.remove(os.path.join(SCREEN_DIR, fn))
-                        except:
-                            pass
-                    shot_count = 0
+                    now = time.localtime()
+                    stamp = time.strftime("%Y-%m-%d_%H-%M-%S", now)
+                    fname = os.path.join(SCREEN_DIR, f"{stamp}.png")
+                    img = pyautogui.screenshot()
+                    img.save(fname)
+                    self.log(f"📸 Screenshot captured: {stamp}")
+                    shot_count += 1
                 except Exception as e:
-                    self.log("❌ Failed to zip/send screenshots: " + str(e))
+                    self.log(f"❌ Screenshot failed: {e}")
 
-            try:
-                if time.localtime().tm_hour == int(self.scan_hour):
-                    self.log("🔍 Running daily software scan...")
-                    self.run_daily_scan()
-                    time.sleep(61)
-            except Exception as e:
-                self.log("❌ Error while scheduled scanning: " + str(e))
+                # Send screenshot report if needed
+                if shot_count >= shots_per_report:
+                    try:
+                        zip_path = make_zip_report()
+                        html = f"<html><body><p>Automated screenshot report: {shot_count} screenshots attached.</p></body></html>"
+                        send_email_with_attachment("Automated Screenshot Report", html, zip_path)
+                        self.log(f"📧 Sent screenshot report with {shot_count} images.")
+                        for fn in os.listdir(SCREEN_DIR):
+                            try:
+                                os.remove(os.path.join(SCREEN_DIR, fn))
+                            except:
+                                pass
+                        shot_count = 0
+                    except Exception as e:
+                        self.log(f"❌ Failed to zip/send screenshots: {e}")
 
-            for _ in range(int(self.screen_interval * 60)):
-                if self.stopped():
-                    break
-                time.sleep(1)
+            # Check if it's time for software scan
+            if self.should_run_scan():
+                try:
+                    self.log(f"🔍 Running scheduled software scan...")
+                    self.run_software_scan()
+                    self.last_scan_time = time.time()
+                    
+                    next_scan = time.localtime(self.last_scan_time + (self.scan_interval_hours * 3600))
+                    next_scan_str = time.strftime("%Y-%m-%d %H:%M:%S", next_scan)
+                    self.log(f"✓ Next scan scheduled at: {next_scan_str}")
+                    
+                except Exception as e:
+                    self.log(f"❌ Scan error: {e}")
+
+            time.sleep(1)
+            seconds_counter += 1
+            
+            if self.stopped():
+                break
 
 def virustotal_file_scan(filepath):
     if not os.path.exists(filepath):
@@ -270,33 +342,6 @@ def virustotal_file_scan(filepath):
 
 # -------------------- MODERN GUI --------------------
 
-class ModernButton(tk.Canvas):
-    def __init__(self, parent, text, command, bg_color=COLORS['primary'], fg_color='white', **kwargs):
-        super().__init__(parent, highlightthickness=0, **kwargs)
-        self.bg_color = bg_color
-        self.fg_color = fg_color
-        self.command = command
-        self.text = text
-        
-        self.config(bg=parent.cget('bg'), height=40, width=150)
-        self.draw()
-        
-        self.bind('<Enter>', self.on_enter)
-        self.bind('<Leave>', self.on_leave)
-        self.bind('<Button-1>', lambda e: self.command())
-        
-    def draw(self, hover=False):
-        self.delete('all')
-        color = self.bg_color if not hover else COLORS['primary_dark']
-        self.create_rectangle(0, 0, 200, 40, fill=color, outline='', tags='bg')
-        self.create_text(75, 20, text=self.text, fill=self.fg_color, font=('Segoe UI', 10, 'bold'))
-        
-    def on_enter(self, e):
-        self.draw(hover=True)
-        
-    def on_leave(self, e):
-        self.draw(hover=False)
-
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -304,11 +349,9 @@ class App(tk.Tk):
         self.geometry("1000x700")
         self.configure(bg=COLORS['bg_light'])
         
-        # Modern style configuration
         style = ttk.Style()
         style.theme_use('clam')
         
-        # Configure styles
         style.configure('Title.TLabel', font=('Segoe UI', 24, 'bold'), 
                        foreground=COLORS['text_dark'], background=COLORS['bg_light'])
         style.configure('Subtitle.TLabel', font=('Segoe UI', 12), 
@@ -337,13 +380,13 @@ class App(tk.Tk):
         frame = self.frames[page_cls]
         frame.tkraise()
 
-    def start_monitoring(self, scan_hour, screen_interval, work_hours, blacklist, ui_callback=None):
+    def start_monitoring(self, scan_interval, screen_interval, work_hours, blacklist, ui_callback=None):
         if self.monitor_thread and getattr(self.monitor_thread, "is_alive", lambda: False)():
             try:
                 self.monitor_thread.stop()
             except:
                 pass
-        self.monitor_thread = AdminMonitor(scan_hour, screen_interval, work_hours, blacklist, ui_callback)
+        self.monitor_thread = AdminMonitor(scan_interval, screen_interval, work_hours, blacklist, ui_callback)
         self.monitor_thread.start()
         return self.monitor_thread
 
@@ -352,31 +395,25 @@ class LoginPage(tk.Frame):
         super().__init__(parent, bg=COLORS['bg_light'])
         self.controller = controller
         
-        # Center card
         card = tk.Frame(self, bg='white', padx=60, pady=40)
         card.place(relx=0.5, rely=0.5, anchor='center')
         
-        # Add shadow effect
         shadow = tk.Frame(self, bg='#e2e8f0')
         shadow.place(relx=0.5, rely=0.502, anchor='center', 
                     width=card.winfo_reqwidth()+4, height=card.winfo_reqheight()+4)
         card.lift()
         
-        # Logo/Icon
         icon = tk.Canvas(card, width=80, height=80, bg='white', highlightthickness=0)
         icon.pack(pady=(0, 20))
         icon.create_oval(10, 10, 70, 70, fill=COLORS['primary'], outline='')
         icon.create_text(40, 40, text='🔒', font=('Segoe UI', 32))
         
-        # Title
         ttk.Label(card, text="SecMon Login", style='Title.TLabel').pack(pady=(0, 10))
         ttk.Label(card, text="Security Monitoring System", style='Subtitle.TLabel').pack(pady=(0, 30))
         
-        # Form
         form = tk.Frame(card, bg='white')
         form.pack(pady=10)
         
-        # Role selection
         tk.Label(form, text="Role", font=('Segoe UI', 10), bg='white', 
                 fg=COLORS['text_light'], anchor='w').grid(row=0, column=0, sticky='w', pady=(0, 5))
         self.role_var = tk.StringVar(value="admin")
@@ -385,26 +422,22 @@ class LoginPage(tk.Frame):
                                   width=30, font=('Segoe UI', 10))
         role_combo.grid(row=1, column=0, pady=(0, 20), ipady=5)
         
-        # Username
         tk.Label(form, text="Username", font=('Segoe UI', 10), bg='white', 
                 fg=COLORS['text_light'], anchor='w').grid(row=2, column=0, sticky='w', pady=(0, 5))
         self.username = ttk.Entry(form, width=32, font=('Segoe UI', 10))
         self.username.grid(row=3, column=0, pady=(0, 20), ipady=5)
         
-        # Password
         tk.Label(form, text="Password", font=('Segoe UI', 10), bg='white', 
                 fg=COLORS['text_light'], anchor='w').grid(row=4, column=0, sticky='w', pady=(0, 5))
         self.password = ttk.Entry(form, width=32, show="●", font=('Segoe UI', 10))
         self.password.grid(row=5, column=0, pady=(0, 30), ipady=5)
         
-        # Login button
         login_btn = tk.Button(form, text="Login", command=self.login_action,
                              bg=COLORS['primary'], fg='white', font=('Segoe UI', 11, 'bold'),
                              border=0, padx=40, pady=12, cursor='hand2',
                              activebackground=COLORS['primary_dark'], activeforeground='white')
         login_btn.grid(row=6, column=0, pady=(0, 20))
         
-        # Demo credentials
         info_frame = tk.Frame(card, bg='#f1f5f9', padx=20, pady=15)
         info_frame.pack(pady=(20, 0), fill='x')
         tk.Label(info_frame, text="Demo Credentials", font=('Segoe UI', 9, 'bold'),
@@ -437,7 +470,6 @@ class AdminPage(tk.Frame):
         super().__init__(parent, bg=COLORS['bg_light'])
         self.controller = controller
         
-        # Header
         header = tk.Frame(self, bg='white', height=80)
         header.pack(fill='x', padx=20, pady=(20, 0))
         header.pack_propagate(False)
@@ -450,30 +482,25 @@ class AdminPage(tk.Frame):
                               border=0, padx=20, pady=8, cursor='hand2')
         logout_btn.pack(side='right', padx=20, pady=20)
         
-        # Main content
         content = tk.Frame(self, bg=COLORS['bg_light'])
         content.pack(fill='both', expand=True, padx=20, pady=20)
         
-        # Left panel - Settings
         left_card = tk.Frame(content, bg='white', padx=25, pady=25)
         left_card.pack(side='left', fill='both', padx=(0, 10))
         
         tk.Label(left_card, text="⚙️ Monitoring Settings", font=('Segoe UI', 14, 'bold'),
                 bg='white', fg=COLORS['text_dark']).pack(anchor='w', pady=(0, 20))
         
-        # Daily scan hour
-        self._create_setting(left_card, "Daily Scan Hour (0-23)", 'scan_hour_var', 
-                           DEFAULT_DAILY_SCAN_HOUR, 'spinbox', from_=0, to=23)
-        
-        # Screenshot interval
+        # UPDATED SETTINGS - INTERVAL BASED
         self._create_setting(left_card, "Screenshot Interval (minutes)", 'screen_interval_var',
                            DEFAULT_SCREEN_INTERVAL_MIN, 'entry')
         
-        # Work hours
+        self._create_setting(left_card, "Software Scan Interval (hours)", 'scan_interval_var',
+                           DEFAULT_SCAN_INTERVAL_HOURS, 'entry')
+        
         self._create_setting(left_card, "Work Hours (for report)", 'work_hours_var',
                            DEFAULT_WORK_HOURS, 'entry')
         
-        # Control buttons
         btn_frame = tk.Frame(left_card, bg='white')
         btn_frame.pack(pady=(25, 0), fill='x')
         
@@ -498,14 +525,12 @@ class AdminPage(tk.Frame):
                             border=0, pady=12, cursor='hand2')
         scan_btn.pack(fill='x')
         
-        # Right panel - Blacklist & Logs
         right_card = tk.Frame(content, bg='white', padx=25, pady=25)
         right_card.pack(side='left', fill='both', expand=True, padx=(10, 0))
         
         tk.Label(right_card, text="📋 Blacklist Management", font=('Segoe UI', 14, 'bold'),
                 bg='white', fg=COLORS['text_dark']).pack(anchor='w', pady=(0, 15))
         
-        # Blacklist controls
         bl_control = tk.Frame(right_card, bg='white')
         bl_control.pack(fill='x', pady=(0, 10))
         
@@ -527,7 +552,6 @@ class AdminPage(tk.Frame):
                             border=0, padx=15, pady=6, cursor='hand2')
         save_btn.pack(side='left')
         
-        # Blacklist listbox
         bl_frame = tk.Frame(right_card, bg='white')
         bl_frame.pack(fill='both', pady=(0, 20))
         
@@ -543,7 +567,6 @@ class AdminPage(tk.Frame):
         for it in load_blacklist():
             self.blacklist_box.insert(tk.END, it)
         
-        # Log section
         tk.Label(right_card, text="📊 Activity Log", font=('Segoe UI', 12, 'bold'),
                 bg='white', fg=COLORS['text_dark']).pack(anchor='w', pady=(10, 10))
         
@@ -604,14 +627,19 @@ class AdminPage(tk.Frame):
         names = get_installed_software_list()
         found = []
         bl = [self.blacklist_box.get(i) for i in range(self.blacklist_box.size())]
+        
+        is_windows = os.name == "nt"
+        
         for b in bl:
             for n in names:
-                if b.lower() in n.lower():
+                if check_blacklist_match(n, b, is_windows):
                     found.append((b, n))
+        
         if found:
-            self.log(f"⚠️ Found {len(found)} blacklisted items: " + ", ".join([f"{b}->{n}" for b, n in found]))
+            found_unique = list(set(found))
+            self.log(f"⚠️ Found {len(found_unique)} blacklisted items")
             zip_path = make_zip_report()
-            html = f"<html><body><p>Quick scan detected blacklisted software: <br>{'<br>'.join([f'{b} matched {n}' for b,n in found])}</p></body></html>"
+            html = f"<html><body><p>Quick scan detected blacklisted software: <br>{'<br>'.join([f'{b} matched {n}' for b,n in found_unique])}</p></body></html>"
             send_email_with_attachment("Quick: Blacklisted Software Detected", html, zip_path)
             self.log("📧 Report emailed successfully")
         else:
@@ -619,10 +647,10 @@ class AdminPage(tk.Frame):
 
     def start_monitor(self):
         bl = [self.blacklist_box.get(i) for i in range(self.blacklist_box.size())]
-        scan_hour = self.scan_hour_var.get()
-        interval = self.screen_interval_var.get()
+        scan_interval = self.scan_interval_var.get()
+        screen_interval = self.screen_interval_var.get()
         work_hours = self.work_hours_var.get()
-        self.controller.start_monitoring(scan_hour, interval, work_hours, bl, ui_callback=self.log)
+        self.controller.start_monitoring(scan_interval, screen_interval, work_hours, bl, ui_callback=self.log)
         self.log("🚀 Monitoring started successfully")
 
     def stop_monitor(self):
@@ -641,7 +669,6 @@ class UserPage(tk.Frame):
         super().__init__(parent, bg=COLORS['bg_light'])
         self.controller = controller
         
-        # Header
         header = tk.Frame(self, bg='white', height=80)
         header.pack(fill='x', padx=20, pady=(20, 0))
         header.pack_propagate(False)
@@ -654,11 +681,9 @@ class UserPage(tk.Frame):
                               border=0, padx=20, pady=8, cursor='hand2')
         logout_btn.pack(side='right', padx=20, pady=20)
         
-        # Main card
         card = tk.Frame(self, bg='white', padx=50, pady=40)
         card.pack(fill='both', expand=True, padx=20, pady=20)
         
-        # Icon
         icon_canvas = tk.Canvas(card, width=100, height=100, bg='white', highlightthickness=0)
         icon_canvas.pack(pady=(0, 30))
         icon_canvas.create_oval(10, 10, 90, 90, fill=COLORS['primary'], outline='')
@@ -669,7 +694,6 @@ class UserPage(tk.Frame):
         tk.Label(card, text="Upload a file to scan for viruses and malware", 
                 font=('Segoe UI', 11), bg='white', fg=COLORS['text_light']).pack(pady=(0, 40))
         
-        # File selection
         file_frame = tk.Frame(card, bg='white')
         file_frame.pack(fill='x', pady=(0, 30))
         
@@ -683,14 +707,12 @@ class UserPage(tk.Frame):
                               border=0, padx=25, pady=10, cursor='hand2')
         browse_btn.pack(side='left')
         
-        # Scan button
         scan_btn = tk.Button(card, text="🔍 Scan File", command=self.scan_file,
                             bg=COLORS['success'], fg='white', font=('Segoe UI', 12, 'bold'),
                             border=0, padx=50, pady=15, cursor='hand2',
                             activebackground='#059669', activeforeground='white')
         scan_btn.pack(pady=(0, 30))
         
-        # Result display
         result_frame = tk.Frame(card, bg='#f8fafc', padx=30, pady=25)
         result_frame.pack(fill='x')
         
@@ -702,7 +724,6 @@ class UserPage(tk.Frame):
                                      bg='#f8fafc', fg=COLORS['text_light'])
         self.result_label.pack(pady=(10, 0))
         
-        # Info text
         info = tk.Label(card, text="Powered by VirusTotal API", 
                        font=('Segoe UI', 9), bg='white', fg=COLORS['text_light'])
         info.pack(side='bottom', pady=(30, 0))
@@ -743,15 +764,11 @@ class UserPage(tk.Frame):
 
         threading.Thread(target=do_scan, daemon=True).start()
 
-# Run the application
 if __name__ == "__main__":
     if not os.path.exists(APP_DIR):
         os.makedirs(APP_DIR, exist_ok=True)
     if not os.path.exists(BLACKLIST_FILE):
-        save_blacklist(["Python", "OpenVPN"])
-
-    if SENDER_PASSWORD == "REPLACE_WITH_APP_PASSWORD":
-        print("WARNING: Please edit SENDER_PASSWORD in the script before running email features.")
+        save_blacklist(["python", "openvpn"])
     
     app = App()
     app.mainloop()
