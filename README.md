@@ -122,7 +122,3 @@ python main.py
 
 - This tool captures screenshots and inventories installed software. Use only on systems you own or where you have explicit authorization.
 - Protect your credentials (email/app password, API key). Do not commit them publicly.
-
-## License
-
-Specify your preferred license (e.g., MIT) here.
